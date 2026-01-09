@@ -9,9 +9,8 @@ const userSchema = new Schema(
         isMFAEnabled: { type: Boolean, default: false },
         mfaOtp: String,
         mfaExpiry: Date,
-
+        activeSessionId: { type: String, default: null },
     }, { timestamps: true }
 );
 
 export const User = model("User", userSchema);
-

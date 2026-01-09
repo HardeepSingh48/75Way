@@ -1,6 +1,6 @@
 export interface JwtPayload {
     id: string;
-
+    sessionId: string;
 }
 
 export interface MFALoginResponse {
@@ -10,5 +10,4 @@ export interface NormalLoginResponse {
     id: string;
     email: string;
 }
-export type LoginServiceResponse = MFALoginResponse | NormalLoginResponse
-
+export type LoginServiceResponse = MFALoginResponse | NormalLoginResponse;

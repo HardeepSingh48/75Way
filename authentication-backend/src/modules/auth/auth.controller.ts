@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { signupService, loginService, changePasswordService, forgotPasswordService, resetPasswordService } from "./auth.service.js";
+import { signupService, loginService, changePasswordService, forgotPasswordService, resetPasswordService, logoutService } from "./auth.service.js";
 import {
   generateAccessToken,
   generateRefreshToken
@@ -23,11 +23,22 @@ export const signup = async (
       return res.status(400).json({ message: "Email and password are required" });
     }
 
+    if (password.length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters long" });
+    }
+
     await signupService(email, password);
     return res.status(201).json({ message: "Signup successful" });
   } catch (error) {
-    console.error("Signup error:", error);
-    return res.status(500).json({ message: "Signup failed", error: (error as Error).message });
+    const errorMessage = (error as Error).message;
+    console.error("Signup error:", errorMessage);
+
+    // Return 409 for duplicate email
+    const statusCode = errorMessage.includes("duplicate") || errorMessage.includes("E11000") ? 409 : 500;
+
+    return res.status(statusCode).json({
+      message: statusCode === 409 ? "Email already exists" : "Signup failed. Please try again."
+    });
   }
 };
 
@@ -52,30 +63,51 @@ export const login = async (
     const result = await loginService(email, password);
 
     if ("mfaRequired" in result) {
-      return res.json({ message: "OTP sent" });
+      return res.json({ message: "OTP sent to your email" });
     }
 
-    const accessToken = generateAccessToken({ id: result.id });
-    const refreshToken = generateRefreshToken({ id: result.id });
+    const accessToken = generateAccessToken({ id: result.id, sessionId: result.sessionId! });
+    const refreshToken = generateRefreshToken({ id: result.id, sessionId: result.sessionId! });
 
     return res
       .cookie("accessToken", accessToken, { httpOnly: true })
       .cookie("refreshToken", refreshToken, { httpOnly: true })
-      .json({ message: "Login success" });
+      .json({ message: "Login successful" });
   } catch (error) {
-    console.error("Login error:", error);
-    return res.status(500).json({ message: "Login failed", error: (error as Error).message });
+    const errorMessage = (error as Error).message;
+    console.error("Login error:", errorMessage);
+
+    // Return 401 for authentication failures, 429 for locked accounts
+    const statusCode = errorMessage.includes("locked") ? 429 : 401;
+
+    return res.status(statusCode).json({
+      message: errorMessage
+    });
   }
 };
 
 export const logout = async (
-  _req: Request,
+  req: Request,
   res: Response
 ): Promise<Response> => {
-  return res
-    .clearCookie("accessToken")
-    .clearCookie("refreshToken")
-    .json({ message: "Logged out" });
+  try {
+    // Clear active session in database
+    if (req.user?.id) {
+      await logoutService(req.user.id);
+    }
+
+    return res
+      .clearCookie("accessToken")
+      .clearCookie("refreshToken")
+      .json({ message: "Logged out" });
+  } catch (error) {
+    console.error("Logout error:", error);
+    // Still clear cookies even if database update fails
+    return res
+      .clearCookie("accessToken")
+      .clearCookie("refreshToken")
+      .json({ message: "Logged out" });
+  }
 };
 
 export const changePassword = async (
@@ -96,6 +128,10 @@ export const changePassword = async (
       return res.status(400).json({ message: "Old and new passwords are required" });
     }
 
+    if (newPassword.length < 8) {
+      return res.status(400).json({ message: "New password must be at least 8 characters long" });
+    }
+
     if (!req.user?.id) {
       return res.status(401).json({ message: "Unauthorized" });
     }
@@ -103,8 +139,13 @@ export const changePassword = async (
     await changePasswordService(req.user.id, oldPassword, newPassword);
     return res.json({ message: "Password changed successfully" });
   } catch (error) {
-    console.error("Change password error:", error);
-    return res.status(500).json({ message: "Password change failed", error: (error as Error).message });
+    const errorMessage = (error as Error).message;
+    console.error("Change password error:", errorMessage);
+
+    // Return 401 if current password is incorrect
+    const statusCode = errorMessage.includes("incorrect") ? 401 : 500;
+
+    return res.status(statusCode).json({ message: errorMessage });
   }
 };
 
@@ -125,13 +166,16 @@ export const forgotPassword = async (
 
     await forgotPasswordService(email);
 
-    // In production, send this via email. For now, return it in response
     return res.json({
       message: "OTP sent to your email"
     });
   } catch (error) {
-    console.error("Forgot password error:", error);
-    return res.status(500).json({ message: "Failed to process request", error: (error as Error).message });
+    const errorMessage = (error as Error).message;
+    console.error("Forgot password error:", errorMessage);
+
+    const statusCode = errorMessage.includes("not found") ? 404 : 500;
+
+    return res.status(statusCode).json({ message: errorMessage });
   }
 };
 
@@ -154,10 +198,22 @@ export const resetPassword = async (
       return res.status(400).json({ message: "Email, reset token, and new password are required" });
     }
 
+    if (newPassword.length < 8) {
+      return res.status(400).json({ message: "New password must be at least 8 characters long" });
+    }
+
     await resetPasswordService(email, resetToken, newPassword);
     return res.json({ message: "Password reset successful" });
   } catch (error) {
-    console.error("Reset password error:", error);
-    return res.status(500).json({ message: "Password reset failed", error: (error as Error).message });
+    const errorMessage = (error as Error).message;
+    console.error("Reset password error:", errorMessage);
+
+    // Return 400 for invalid/expired tokens, 404 for user not found
+    let statusCode = 400;
+    if (errorMessage.includes("not found")) {
+      statusCode = 404;
+    }
+
+    return res.status(statusCode).json({ message: errorMessage });
   }
 };
